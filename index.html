@@ -1,0 +1,479 @@
+
+<!DOCTYPE html>
+<html lang="no">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Værvarsel - Sør-Norge</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f0f4f8;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        .weather-header {
+            background: linear-gradient(135deg, #1a73e8, #0d47a1);
+            color: white;
+            padding: 1.5rem 0;
+            margin-bottom: 2rem;
+        }
+        .weather-header h1 {
+            font-weight: 300;
+            font-size: 1.8rem;
+        }
+        .weather-header p {
+            opacity: 0.85;
+            margin-bottom: 0;
+        }
+        .table-container {
+            overflow-x: auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+            padding: 1rem;
+        }
+        .weather-table {
+            margin-bottom: 0;
+        }
+        .weather-table thead th {
+            background-color: #e8f0fe;
+            border-bottom: 2px solid #1a73e8;
+            text-align: center;
+            font-weight: 600;
+            font-size: 0.85rem;
+            white-space: nowrap;
+            padding: 0.75rem 0.5rem;
+        }
+        .weather-table thead th:first-child {
+            text-align: left;
+            min-width: 110px;
+        }
+        .weather-table tbody td {
+            text-align: center;
+            vertical-align: middle;
+            padding: 0.5rem;
+            font-size: 0.85rem;
+        }
+        .weather-table tbody td:first-child {
+            text-align: left;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .weather-table tbody tr:hover {
+            background-color: #f8f9ff;
+        }
+        .weather-cell {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+            min-width: 100px;
+        }
+        .weather-cell img {
+            width: 38px;
+            height: 38px;
+        }
+        .temp {
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+        .temp-max { color: #d32f2f; }
+        .temp-min { color: #1565c0; }
+        .temp-separator { color: #999; margin: 0 1px; }
+        .precip {
+            color: #1a73e8;
+            font-size: 0.75rem;
+        }
+        .precip.dry {
+            color: #aaa;
+        }
+        .day-name {
+            display: block;
+            font-size: 0.95rem;
+        }
+        .day-date {
+            display: block;
+            font-size: 0.75rem;
+            color: #666;
+            font-weight: 400;
+        }
+        #loading {
+            text-align: center;
+            padding: 3rem;
+        }
+        .spinner-border {
+            color: #1a73e8;
+        }
+        #error {
+            display: none;
+        }
+        #updated-current, #updated-next {
+            opacity: 0.7;
+            font-size: 0.85rem;
+        }
+        .attribution {
+            text-align: center;
+            margin-top: 1.5rem;
+            font-size: 0.8rem;
+            color: #777;
+        }
+        .attribution a {
+            color: #1a73e8;
+        }
+    </style>
+</head>
+<body>
+    <div class="weather-header">
+        <div class="container">
+            <h1>Værvarsel — Sør-Norge</h1>
+            <p><span id="updated-current"></span><br><span id="updated-next"></span></p>
+        </div>
+    </div>
+
+    <div class="container mb-4">
+        <div class="table-container">
+            <div id="loading">
+                <div class="spinner-border mb-3" role="status"></div>
+                <p>Henter værdata fra Yr...</p>
+            </div>
+            <div id="error" class="alert alert-danger" role="alert"></div>
+            <div id="forecast" style="display: none;">
+                <table class="table weather-table" id="weather-table">
+                    <thead><tr id="table-header"></tr></thead>
+                    <tbody id="table-body"></tbody>
+                </table>
+            </div>
+        </div>
+        <div class="attribution">
+            Værdata fra <a href="https://www.yr.no/" target="_blank">Yr</a>,
+            levert av <a href="https://www.met.no/" target="_blank">Meteorologisk institutt</a>
+        </div>
+    </div>
+
+    <script>
+        const LOCATIONS = [
+            { name: 'Stavanger',     lat: 58.9700, lon: 5.7314 },
+            { name: 'Helleland',     lat: 58.5238, lon: 6.1172 },
+            { name: 'Moi',           lat: 58.4614, lon: 6.5511 },
+            { name: 'Flekkefjord',   lat: 58.2971, lon: 6.6603 },
+            { name: 'Lyngdal',       lat: 58.1376, lon: 7.0700 },
+            { name: 'Mandal',        lat: 58.0268, lon: 7.4535 },
+            { name: 'Kristiansand',  lat: 58.1467, lon: 7.9956 },
+            { name: 'Arendal',       lat: 58.4615, lon: 8.7725 },
+            { name: 'Tvedestrand',   lat: 58.6227, lon: 8.9311 },
+            { name: 'Kragerø',       lat: 58.8869, lon: 9.3469 },
+            { name: 'Sandefjord',    lat: 59.1306, lon: 10.2167 },
+            { name: 'Horten',        lat: 59.4208, lon: 10.4328 },
+            { name: 'Drammen',       lat: 59.7378, lon: 10.2050 },
+            { name: 'Solsetra',      lat: 59.7325, lon: 10.0447 },
+        ];
+
+        const DAY_NAMES = ['Søn', 'Man', 'Tir', 'Ons', 'Tor', 'Fre', 'Lør'];
+        const ICON_BASE = 'https://cdn.jsdelivr.net/gh/metno/weathericons@main/weather/svg/';
+        const API_BASE = 'https://api.met.no/weatherapi/locationforecast/2.0/compact';
+        const USER_AGENT = 'WeatherForecastApp/1.0 knut.hollund@bouvet.no';
+        const FALLBACK_TTL_MS = 60 * 60 * 1000; // 1 hour fallback if no Expires header
+
+        function cacheGet(key) {
+            try { return localStorage.getItem(key); } catch (e) { return null; }
+        }
+        function cacheSet(key, value) {
+            try { localStorage.setItem(key, value); } catch (e) {}
+        }
+
+        const MIN_FETCH_INTERVAL_MS = 60 * 1000;
+
+        function lastFetchAge() {
+            const ts = cacheGet('weather_last_fetch');
+            return ts ? Date.now() - parseInt(ts, 10) : Infinity;
+        }
+        function markFetched() {
+            cacheSet('weather_last_fetch', String(Date.now()));
+        }
+        function clearWeatherCache() {
+            try {
+                LOCATIONS.forEach(loc => localStorage.removeItem(`weather_${loc.name}`));
+            } catch (e) {}
+        }
+
+        async function fetchForecast(location, skipCache = false) {
+            const cacheKey = `weather_${location.name}`;
+            const cachedItem = cacheGet(cacheKey);
+
+            if (!skipCache && cachedItem) {
+                try {
+                    const parsed = JSON.parse(cachedItem);
+                    if (parsed.expires && Date.now() < new Date(parsed.expires).getTime()) {
+                        return { data: parsed.data, expires: parsed.expires };
+                    }
+                } catch (e) {
+                    console.warn(`Feil ved lesing av cache for ${location.name}`, e);
+                }
+            }
+
+            const url = `${API_BASE}?lat=${location.lat}&lon=${location.lon}`;
+            const headers = {};
+            if (!skipCache && cachedItem) {
+                try {
+                    const parsed = JSON.parse(cachedItem);
+                    if (parsed.lastModified) {
+                        headers['If-Modified-Since'] = parsed.lastModified;
+                    }
+                } catch (e) {}
+            }
+
+            try {
+                const response = await fetch(url, { headers, cache: 'reload' });
+
+                if (response.status === 304 && cachedItem) {
+                    const parsed = JSON.parse(cachedItem);
+                    parsed.expires = response.headers.get('Expires') || parsed.expires;
+                    cacheSet(cacheKey, JSON.stringify(parsed));
+                    return { data: parsed.data, expires: parsed.expires };
+                }
+
+                if (!response.ok) throw new Error(`Feil for ${location.name}: ${response.status}`);
+                const data = await response.json();
+
+                const expires = response.headers.get('Expires');
+                const cacheEntry = {
+                    data,
+                    expires,
+                    lastModified: response.headers.get('Last-Modified'),
+                };
+                cacheSet(cacheKey, JSON.stringify(cacheEntry));
+
+                return { data, expires };
+            } catch (err) {
+                if (cachedItem) {
+                    console.warn(`Bruker cache for ${location.name} pga nettverksfeil.`);
+                    const parsed = JSON.parse(cachedItem);
+                    return { data: parsed.data, expires: parsed.expires };
+                }
+                throw err;
+            }
+        }
+
+        function msUntilNextForecast(updatedAt) {
+            if (!updatedAt) return 15 * 60 * 1000;
+            const nextForecast = new Date(updatedAt).getTime() + 65 * 60 * 1000;
+            const delay = nextForecast - Date.now();
+            return delay > 0 ? delay : 2 * 60 * 1000;
+        }
+
+        function getWeekendDays() {
+            const days = [];
+            const now = new Date();
+            const dayOfWeek = now.getDay();
+            const daysToSunday = (7 - dayOfWeek) % 7;
+            const sunday = new Date(now);
+            sunday.setDate(now.getDate() + daysToSunday);
+
+            for (let offset = -2; offset <= 0; offset++) {
+                const d = new Date(sunday);
+                d.setDate(sunday.getDate() + offset);
+                const dateStr = d.toISOString().split('T')[0];
+                days.push({
+                    dateStr,
+                    dayName: DAY_NAMES[d.getDay()],
+                    dayNum: d.getDate(),
+                    month: d.getMonth() + 1,
+                });
+            }
+            return days;
+        }
+
+        function aggregateDaily(timeseries, days) {
+            const result = {};
+
+            for (const day of days) {
+                result[day.dateStr] = { temps: [], rainPeriods: [], symbol: null };
+            }
+
+            const daySet = new Set(days.map(d => d.dateStr));
+
+            for (const entry of timeseries) {
+                const dateStr = entry.time.split('T')[0];
+                if (!daySet.has(dateStr)) continue;
+
+                const bucket = result[dateStr];
+                const hour = parseInt(entry.time.split('T')[1].split(':')[0], 10);
+
+                if (entry.data.instant?.details?.air_temperature != null) {
+                    bucket.temps.push(entry.data.instant.details.air_temperature);
+                }
+
+                if (hour >= 9 && hour < 22) {
+                    if (entry.data.next_1_hours?.details?.precipitation_amount != null) {
+                        const amt = entry.data.next_1_hours.details.precipitation_amount;
+                        if (amt > 0) {
+                            bucket.rainPeriods.push({ start: hour, end: hour + 1, amount: amt });
+                        }
+                    } else if (entry.data.next_6_hours?.details?.precipitation_amount != null && hour % 6 === 0) {
+                        const amt = entry.data.next_6_hours.details.precipitation_amount;
+                        if (amt > 0) {
+                            const start = Math.max(hour, 9);
+                            const end = Math.min(hour + 6, 22);
+                            bucket.rainPeriods.push({ start, end, amount: amt * ((end - start) / 6) });
+                        }
+                    }
+                }
+
+                if (hour >= 10 && hour <= 14 && !bucket.symbol) {
+                    const sym = entry.data.next_6_hours?.summary?.symbol_code
+                             || entry.data.next_1_hours?.summary?.symbol_code;
+                    if (sym) bucket.symbol = sym;
+                }
+            }
+
+            for (const day of days) {
+                const b = result[day.dateStr];
+                b.rainPeriods.sort((a, c) => a.start - c.start);
+                b.rainRanges = mergeRainPeriods(b.rainPeriods);
+                if (!b.symbol) {
+                    const fallback = timeseries.find(e =>
+                        e.time.startsWith(day.dateStr) &&
+                        (e.data.next_6_hours?.summary?.symbol_code || e.data.next_1_hours?.summary?.symbol_code)
+                    );
+                    if (fallback) {
+                        b.symbol = fallback.data.next_6_hours?.summary?.symbol_code
+                                || fallback.data.next_1_hours?.summary?.symbol_code;
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        function mergeRainPeriods(periods) {
+            if (periods.length === 0) return [];
+            const ranges = [];
+            let cur = { ...periods[0] };
+            for (let i = 1; i < periods.length; i++) {
+                const p = periods[i];
+                if (p.start <= cur.end) {
+                    cur.end = Math.max(cur.end, p.end);
+                    cur.amount += p.amount;
+                } else {
+                    ranges.push(cur);
+                    cur = { ...p };
+                }
+            }
+            ranges.push(cur);
+            return ranges;
+        }
+
+        function renderTable(allData, days) {
+            const header = document.getElementById('table-header');
+            header.innerHTML = '<th>Sted</th>';
+            for (const day of days) {
+                header.innerHTML += `<th><span class="day-name">${day.dayName}</span><span class="day-date">${day.dayNum}.${day.month}</span></th>`;
+            }
+
+            const tbody = document.getElementById('table-body');
+            tbody.innerHTML = '';
+
+            for (const { location, daily } of allData) {
+                const row = document.createElement('tr');
+                let cells = `<td>${location.name}</td>`;
+
+                for (const day of days) {
+                    const d = daily[day.dateStr];
+                    if (!d || d.temps.length === 0) {
+                        cells += '<td>—</td>';
+                        continue;
+                    }
+
+                    const minTemp = Math.round(Math.min(...d.temps));
+                    const maxTemp = Math.round(Math.max(...d.temps));
+                    const symbol = d.symbol || 'cloudy';
+                    const iconUrl = `${ICON_BASE}${symbol}.svg`;
+
+                    let precipHtml;
+                    if (d.rainRanges.length === 0) {
+                        precipHtml = '<div class="precip dry">—</div>';
+                    } else {
+                        precipHtml = d.rainRanges.map(r => {
+                            const amt = Math.round(r.amount * 10) / 10;
+                            const pad = h => String(h).padStart(2, '0');
+                            return `<div class="precip">${amt} mm kl. ${pad(r.start)}–${pad(r.end)}</div>`;
+                        }).join('');
+                    }
+
+                    cells += `
+                        <td>
+                            <div class="weather-cell">
+                                <img src="${iconUrl}" alt="${symbol}" loading="lazy">
+                                <div class="temp">
+                                    <span class="temp-min">${minTemp}°</span>
+                                    <span class="temp-separator">/</span>
+                                    <span class="temp-max">${maxTemp}°</span>
+                                </div>
+                                ${precipHtml}
+                            </div>
+                        </td>`;
+                }
+
+                row.innerHTML = cells;
+                tbody.appendChild(row);
+            }
+        }
+
+        async function loadForecast(skipCache = false) {
+            const loading = document.getElementById('loading');
+            const error = document.getElementById('error');
+            const forecast = document.getElementById('forecast');
+            const days = getWeekendDays();
+
+            try {
+                const results = await Promise.all(
+                    LOCATIONS.map(async (loc) => {
+                        const result = await fetchForecast(loc, skipCache);
+                        const daily = aggregateDaily(result.data.properties.timeseries, days);
+                        const updatedAt = result.data.properties?.meta?.updated_at;
+                        return { location: loc, daily, updatedAt, expires: result.expires };
+                    })
+                );
+
+                loading.style.display = 'none';
+                error.style.display = 'none';
+                forecast.style.display = 'block';
+                renderTable(results, days);
+                if (skipCache) markFetched();
+
+                const pad = v => String(v).padStart(2, '0');
+
+                const latestUpdate = results.map(r => r.updatedAt).filter(Boolean).sort().pop();
+
+                if (latestUpdate) {
+                    const d = new Date(latestUpdate);
+                    document.getElementById('updated-current').textContent = `Prognose oppdatert kl. ${pad(d.getHours())}.${pad(d.getMinutes())}`;
+                    const next = new Date(d.getTime() + 60 * 60 * 1000);
+                    document.getElementById('updated-next').textContent = `Neste prognose ca. kl. ${pad(next.getHours())}.${pad(next.getMinutes())}`;
+                }
+
+                scheduleRefresh(latestUpdate);
+            } catch (err) {
+                loading.style.display = 'none';
+                error.style.display = 'block';
+                error.textContent = `Kunne ikke hente værdata: ${err.message}`;
+                scheduleRefresh(null);
+            }
+        }
+
+        let refreshTimer = null;
+        function scheduleRefresh(updatedAt) {
+            if (refreshTimer) clearTimeout(refreshTimer);
+            const delay = msUntilNextForecast(updatedAt);
+            refreshTimer = setTimeout(() => loadForecast(false), delay);
+        }
+
+        if (lastFetchAge() < MIN_FETCH_INTERVAL_MS) {
+            loadForecast(false);
+        } else {
+            clearWeatherCache();
+            loadForecast(true);
+        }
+    </script>
+</body>
+</html>
