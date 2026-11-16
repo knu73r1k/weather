@@ -120,6 +120,100 @@
         .attribution a {
             color: #1a73e8;
         }
+        .places-panel {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+            padding: 0.75rem 1rem;
+        }
+        .places-toggle {
+            background: none;
+            border: none;
+            color: #1a73e8;
+            font-weight: 600;
+            font-size: 0.95rem;
+            padding: 0.25rem 0;
+            cursor: pointer;
+        }
+        .places-body {
+            margin-top: 0.75rem;
+        }
+        .places-search {
+            position: relative;
+            max-width: 420px;
+        }
+        .search-results {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: white;
+            border: 1px solid #dde3ea;
+            border-radius: 8px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+            margin-top: 2px;
+            max-height: 280px;
+            overflow-y: auto;
+            z-index: 20;
+            display: none;
+        }
+        .search-results.show { display: block; }
+        .search-result {
+            padding: 0.5rem 0.75rem;
+            cursor: pointer;
+            font-size: 0.9rem;
+            border-bottom: 1px solid #f0f2f5;
+        }
+        .search-result:last-child { border-bottom: none; }
+        .search-result:hover { background: #f0f4ff; }
+        .search-result .sr-name { font-weight: 600; }
+        .search-result .sr-meta { color: #777; font-size: 0.8rem; }
+        .search-empty { padding: 0.5rem 0.75rem; color: #999; font-size: 0.85rem; }
+        .selected-places {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 0.85rem;
+        }
+        .place-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            background: #e8f0fe;
+            color: #0d47a1;
+            border-radius: 16px;
+            padding: 4px 6px;
+            font-size: 0.85rem;
+        }
+        .chip-label { padding: 0 2px; }
+        .place-chip button {
+            border: none;
+            border-radius: 50%;
+            width: 18px;
+            height: 18px;
+            line-height: 1;
+            font-size: 0.8rem;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+        }
+        .chip-move {
+            background: #cfe0fb;
+            color: #0d47a1;
+        }
+        .chip-move:hover:not(:disabled) { background: #b6d2f8; }
+        .chip-move:disabled {
+            opacity: 0.35;
+            cursor: default;
+        }
+        .chip-remove {
+            background: #1a73e8;
+            color: white;
+        }
+        .chip-remove:hover { background: #d32f2f; }
+        .places-empty { color: #999; font-size: 0.85rem; margin-top: 0.85rem; }
     </style>
 </head>
 <body>
@@ -127,6 +221,19 @@
         <div class="container">
             <h1>Værvarsel — Sør-Norge</h1>
             <p><span id="updated-current"></span><br><span id="updated-next"></span></p>
+        </div>
+    </div>
+
+    <div class="container mb-3">
+        <div class="places-panel">
+            <button id="places-toggle" class="places-toggle" type="button" aria-expanded="false">⚙ Velg steder</button>
+            <div id="places-body" class="places-body" style="display: none;">
+                <div class="places-search">
+                    <input id="place-search" type="text" class="form-control" placeholder="Søk etter sted i Norge…" autocomplete="off">
+                    <div id="search-results" class="search-results"></div>
+                </div>
+                <div id="selected-places" class="selected-places"></div>
+            </div>
         </div>
     </div>
 
@@ -151,7 +258,7 @@
     </div>
 
     <script>
-        const LOCATIONS = [
+        const DEFAULT_LOCATIONS = [
             { name: 'Stavanger',     lat: 58.9700, lon: 5.7314 },
             { name: 'Helleland',     lat: 58.5238, lon: 6.1172 },
             { name: 'Moi',           lat: 58.4614, lon: 6.5511 },
@@ -167,6 +274,40 @@
             { name: 'Drammen',       lat: 59.7378, lon: 10.2050 },
             { name: 'Solsetra',      lat: 59.7325, lon: 10.0447 },
         ];
+
+        const PLACES_COOKIE = 'weather_places';
+        const COOKIE_MAX_AGE = 60 * 60 * 24 * 365; // 1 year
+
+        function getCookie(name) {
+            const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+            return match ? decodeURIComponent(match[1]) : null;
+        }
+        function setCookie(name, value) {
+            document.cookie = `${name}=${encodeURIComponent(value)}; max-age=${COOKIE_MAX_AGE}; path=/; SameSite=Lax`;
+        }
+
+        function loadPlaces() {
+            const raw = getCookie(PLACES_COOKIE);
+            if (raw) {
+                try {
+                    const parsed = JSON.parse(raw);
+                    if (Array.isArray(parsed) && parsed.every(p => p && p.name && p.lat != null && p.lon != null)) {
+                        return parsed;
+                    }
+                } catch (e) { /* fall through to defaults */ }
+            }
+            return DEFAULT_LOCATIONS.map(p => ({ ...p }));
+        }
+        function savePlaces(list) {
+            setCookie(PLACES_COOKIE, JSON.stringify(list));
+        }
+
+        // Mutable, cookie-backed list of places shown in the app.
+        let LOCATIONS = loadPlaces();
+
+        function cacheKeyFor(location) {
+            return `weather_${location.name}_${location.lat}_${location.lon}`;
+        }
 
         const DAY_NAMES = ['Søn', 'Man', 'Tir', 'Ons', 'Tor', 'Fre', 'Lør'];
         const ICON_BASE = 'https://cdn.jsdelivr.net/gh/metno/weathericons@main/weather/svg/';
@@ -192,12 +333,12 @@
         }
         function clearWeatherCache() {
             try {
-                LOCATIONS.forEach(loc => localStorage.removeItem(`weather_${loc.name}`));
+                LOCATIONS.forEach(loc => localStorage.removeItem(cacheKeyFor(loc)));
             } catch (e) {}
         }
 
         async function fetchForecast(location, skipCache = false) {
-            const cacheKey = `weather_${location.name}`;
+            const cacheKey = cacheKeyFor(location);
             const cachedItem = cacheGet(cacheKey);
 
             if (!skipCache && cachedItem) {
@@ -373,6 +514,11 @@
             const tbody = document.getElementById('table-body');
             tbody.innerHTML = '';
 
+            if (allData.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="${days.length + 1}" style="text-align:center;color:#999;padding:2rem;">Ingen steder valgt. Bruk «⚙ Velg steder» for å legge til.</td></tr>`;
+                return;
+            }
+
             for (const { location, daily } of allData) {
                 const row = document.createElement('tr');
                 let cells = `<td>${location.name}</td>`;
@@ -467,6 +613,162 @@
             const delay = msUntilNextForecast(updatedAt);
             refreshTimer = setTimeout(() => loadForecast(false), delay);
         }
+
+        // --- Place search & selection (Kartverket Stedsnavn) ---
+        const GEO_API = 'https://ws.geonorge.no/stedsnavn/v1/navn';
+        const round4 = n => Math.round(n * 10000) / 10000;
+
+        function samePlace(a, b) {
+            return round4(a.lat) === round4(b.lat) && round4(a.lon) === round4(b.lon);
+        }
+
+        async function searchPlaces(query) {
+            const url = `${GEO_API}?sok=${encodeURIComponent(query)}*&utkoordsys=4258&treffPerSide=8&side=1`;
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`Søk feilet: ${response.status}`);
+            const data = await response.json();
+            return (data.navn || []).map(n => ({
+                name: n.skrivemåte,
+                type: n.navneobjekttype || '',
+                kommune: (n.kommuner && n.kommuner[0]) ? n.kommuner[0].kommunenavn : '',
+                lat: round4(n.representasjonspunkt.nord),
+                lon: round4(n.representasjonspunkt.øst),
+            }));
+        }
+
+        function renderSearchResults(results) {
+            const box = document.getElementById('search-results');
+            if (results.length === 0) {
+                box.innerHTML = '<div class="search-empty">Ingen treff</div>';
+                box.classList.add('show');
+                return;
+            }
+            box.innerHTML = results.map((r, i) => {
+                const meta = [r.type, r.kommune].filter(Boolean).join(' · ');
+                return `<div class="search-result" data-index="${i}">
+                            <div class="sr-name">${r.name}</div>
+                            <div class="sr-meta">${meta}</div>
+                        </div>`;
+            }).join('');
+            box.classList.add('show');
+            box.querySelectorAll('.search-result').forEach(el => {
+                el.addEventListener('click', () => addPlace(results[parseInt(el.dataset.index, 10)]));
+            });
+        }
+
+        function hideSearchResults() {
+            const box = document.getElementById('search-results');
+            box.classList.remove('show');
+            box.innerHTML = '';
+        }
+
+        function addPlace(result) {
+            const place = { name: result.name, lat: round4(result.lat), lon: round4(result.lon) };
+            if (!LOCATIONS.some(p => samePlace(p, place))) {
+                LOCATIONS.push(place);
+                savePlaces(LOCATIONS);
+                renderSelectedPlaces();
+                loadForecast(false);
+            }
+            document.getElementById('place-search').value = '';
+            hideSearchResults();
+        }
+
+        function removePlace(index) {
+            LOCATIONS.splice(index, 1);
+            savePlaces(LOCATIONS);
+            renderSelectedPlaces();
+            loadForecast(false);
+        }
+
+        function movePlace(index, delta) {
+            const target = index + delta;
+            if (target < 0 || target >= LOCATIONS.length) return;
+            [LOCATIONS[index], LOCATIONS[target]] = [LOCATIONS[target], LOCATIONS[index]];
+            savePlaces(LOCATIONS);
+            renderSelectedPlaces();
+            loadForecast(false);
+        }
+
+        function renderSelectedPlaces() {
+            const container = document.getElementById('selected-places');
+            if (LOCATIONS.length === 0) {
+                container.innerHTML = '<div class="places-empty">Ingen steder valgt.</div>';
+                return;
+            }
+            container.innerHTML = '';
+            LOCATIONS.forEach((loc, i) => {
+                const chip = document.createElement('span');
+                chip.className = 'place-chip';
+
+                const up = document.createElement('button');
+                up.type = 'button';
+                up.className = 'chip-move';
+                up.textContent = '‹';
+                up.setAttribute('aria-label', `Flytt ${loc.name} tidligere`);
+                up.disabled = i === 0;
+                up.addEventListener('click', () => movePlace(i, -1));
+
+                const label = document.createElement('span');
+                label.className = 'chip-label';
+                label.textContent = loc.name;
+
+                const down = document.createElement('button');
+                down.type = 'button';
+                down.className = 'chip-move';
+                down.textContent = '›';
+                down.setAttribute('aria-label', `Flytt ${loc.name} senere`);
+                down.disabled = i === LOCATIONS.length - 1;
+                down.addEventListener('click', () => movePlace(i, 1));
+
+                const remove = document.createElement('button');
+                remove.type = 'button';
+                remove.className = 'chip-remove';
+                remove.textContent = '×';
+                remove.setAttribute('aria-label', `Fjern ${loc.name}`);
+                remove.addEventListener('click', () => removePlace(i));
+
+                chip.appendChild(up);
+                chip.appendChild(label);
+                chip.appendChild(down);
+                chip.appendChild(remove);
+                container.appendChild(chip);
+            });
+        }
+
+        function initPlacesUI() {
+            const toggle = document.getElementById('places-toggle');
+            const body = document.getElementById('places-body');
+            toggle.addEventListener('click', () => {
+                const open = body.style.display !== 'none';
+                body.style.display = open ? 'none' : 'block';
+                toggle.setAttribute('aria-expanded', String(!open));
+            });
+
+            const input = document.getElementById('place-search');
+            let debounceTimer = null;
+            input.addEventListener('input', () => {
+                const q = input.value.trim();
+                clearTimeout(debounceTimer);
+                if (q.length < 2) { hideSearchResults(); return; }
+                debounceTimer = setTimeout(async () => {
+                    try {
+                        renderSearchResults(await searchPlaces(q));
+                    } catch (e) {
+                        console.warn('Stedssøk feilet', e);
+                    }
+                }, 300);
+            });
+
+            // Close the dropdown when clicking outside the search box.
+            document.addEventListener('click', (e) => {
+                if (!e.target.closest('.places-search')) hideSearchResults();
+            });
+
+            renderSelectedPlaces();
+        }
+
+        initPlacesUI();
 
         if (lastFetchAge() < MIN_FETCH_INTERVAL_MS) {
             loadForecast(false);

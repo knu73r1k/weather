@@ -1,0 +1,31 @@
+name: Deploy to FTPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Deploy via FTPS
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ftps.ibreakstuff.no
+          protocol: ftps
+          username: ${{ secrets.FTPS_USERNAME }}
+          password: ${{ secrets.FTPS_PWD }}
+          server-dir: /www/mctur/
+          local-dir: ./
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/.github/**
+            README.md
+            .gitignore
