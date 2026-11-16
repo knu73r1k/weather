@@ -21,7 +21,7 @@ jobs:
           protocol: ftps
           username: ${{ secrets.FTPS_USERNAME }}
           password: ${{ secrets.FTPS_PWD }}
-          server-dir: /www/mctur/
+          server-dir: /public_html/mctur/
           local-dir: ./
           exclude: |
             **/.git*
