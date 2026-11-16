@@ -17,7 +17,7 @@ jobs:
       - name: Deploy via FTPS
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
-          server: ftps.ibreakstuff.no
+          server: ftp.ibreakstuff.no
           protocol: ftps
           username: ${{ secrets.FTPS_USERNAME }}
           password: ${{ secrets.FTPS_PWD }}
