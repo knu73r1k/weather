@@ -214,6 +214,100 @@
         }
         .chip-remove:hover { background: #d32f2f; }
         .places-empty { color: #999; font-size: 0.85rem; margin-top: 0.85rem; }
+
+        /* --- Tabs --- */
+        .app-tabs {
+            display: flex;
+            gap: 6px;
+            border-bottom: 2px solid #d6e2f5;
+        }
+        .tab-btn {
+            background: none;
+            border: none;
+            border-bottom: 3px solid transparent;
+            margin-bottom: -2px;
+            padding: 0.5rem 1rem;
+            font-size: 1rem;
+            font-weight: 600;
+            color: #5f6f86;
+            cursor: pointer;
+        }
+        .tab-btn:hover { color: #1a73e8; }
+        .tab-btn.active {
+            color: #1a73e8;
+            border-bottom-color: #1a73e8;
+        }
+
+        /* --- Trip tab --- */
+        .trip-panel {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+            padding: 1rem;
+        }
+        .trip-summary {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            gap: 0.25rem 1.25rem;
+            margin-bottom: 0.85rem;
+        }
+        .trip-route-name {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #0d47a1;
+        }
+        .trip-stat { font-size: 0.95rem; color: #333; }
+        .trip-stat strong { font-size: 1.15rem; }
+        .trip-note { font-size: 0.8rem; color: #888; }
+        #trip-map {
+            height: 60vh;
+            min-height: 340px;
+            border-radius: 8px;
+            z-index: 0;
+        }
+        #trip-status {
+            text-align: center;
+            padding: 2rem 1rem;
+            color: #555;
+        }
+        #trip-status.error { color: #b3261e; }
+        .leg-list {
+            list-style: none;
+            padding: 0;
+            margin: 1rem 0 0;
+        }
+        .leg-item {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            gap: 0.25rem 0.75rem;
+            padding: 0.5rem 0.6rem;
+            border-bottom: 1px solid #f0f2f5;
+            cursor: pointer;
+            font-size: 0.9rem;
+            border-radius: 6px;
+        }
+        .leg-item:last-child { border-bottom: none; }
+        .leg-item:hover, .leg-item.active { background: #eef4ff; }
+        .leg-nums { color: #1a73e8; font-weight: 700; min-width: 3.5rem; }
+        .leg-names { flex: 1 1 14rem; font-weight: 600; }
+        .leg-stats { color: #444; white-space: nowrap; }
+        .leg-cum { color: #999; font-size: 0.8rem; white-space: nowrap; }
+        .stop-marker {
+            background: #1a73e8;
+            color: white;
+            border: 2px solid white;
+            border-radius: 50%;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+            font-size: 12px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .stop-marker.start { background: #2e7d32; }
+        .stop-marker.end { background: #c62828; }
     </style>
 </head>
 <body>
@@ -237,7 +331,28 @@
         </div>
     </div>
 
-    <div class="container mb-4">
+    <div class="container mb-3">
+        <nav class="app-tabs" role="tablist">
+            <button class="tab-btn active" type="button" role="tab" data-tab="weather" aria-selected="true">🌤 Vær</button>
+            <button class="tab-btn" type="button" role="tab" data-tab="trip" aria-selected="false">🏍 Tur</button>
+        </nav>
+    </div>
+
+    <div class="container mb-4" id="tab-trip" hidden>
+        <div class="trip-panel">
+            <div id="trip-summary" class="trip-summary" hidden></div>
+            <div id="trip-status">Laster kart…</div>
+            <div id="trip-map" hidden></div>
+            <ol id="leg-list" class="leg-list" hidden></ol>
+        </div>
+        <div class="attribution">
+            Kart © <a href="https://www.kartverket.no/" target="_blank">Kartverket</a> ·
+            Rute fra <a href="https://valhalla.github.io/valhalla/" target="_blank">Valhalla</a> /
+            <a href="https://www.fossgis.de/" target="_blank">FOSSGIS</a>, data © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>
+        </div>
+    </div>
+
+    <div class="container mb-4" id="tab-weather">
         <div class="table-container">
             <div id="loading">
                 <div class="spinner-border mb-3" role="status"></div>
@@ -300,6 +415,7 @@
         }
         function savePlaces(list) {
             setCookie(PLACES_COOKIE, JSON.stringify(list));
+            onPlacesChanged();
         }
 
         // Mutable, cookie-backed list of places shown in the app.
@@ -768,7 +884,268 @@
             renderSelectedPlaces();
         }
 
+        // --- Trip tab: route through the selected places, top → bottom ---
+        const LEAFLET_BASE = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/';
+        const ROUTE_API = 'https://valhalla1.openstreetmap.de/route';
+        const TOPO_TILES = 'https://cache.kartverket.no/v1/wmts/1.0.0/topo/default/webmercator/{z}/{y}/{x}.png';
+        const ROUTE_MAX_LOCATIONS = 10; // limit on valhalla1.openstreetmap.de
+        const ROUTE_CACHE_KEY = 'trip_route';
+        const ROUTE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // roads rarely change; refresh weekly
+        const ROUTE_COLOR = '#1a73e8';
+        const ROUTE_HIGHLIGHT = '#ff6d00';
+
+        let activeTab = 'weather';
+        let leafletPromise = null;
+        let tripMap = null;
+        let tripLayer = null;
+        let tripRenderToken = 0;
+        let tripRenderedKey = null;
+        let tripRerenderTimer = null;
+
+        const escapeHtml = s => String(s).replace(/[&<>"']/g, c =>
+            ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+        function loadLeaflet() {
+            if (window.L) return Promise.resolve();
+            if (leafletPromise) return leafletPromise;
+            leafletPromise = new Promise((resolve, reject) => {
+                const css = document.createElement('link');
+                css.rel = 'stylesheet';
+                css.href = LEAFLET_BASE + 'leaflet.css';
+                document.head.appendChild(css);
+                const js = document.createElement('script');
+                js.src = LEAFLET_BASE + 'leaflet.js';
+                js.onload = () => resolve();
+                js.onerror = () => { leafletPromise = null; reject(new Error('Kunne ikke laste kartbiblioteket')); };
+                document.head.appendChild(js);
+            });
+            return leafletPromise;
+        }
+
+        // Valhalla returns each leg's geometry as an encoded polyline with 6-digit precision.
+        function decodePolyline6(str) {
+            const coords = [];
+            let index = 0, lat = 0, lon = 0;
+            while (index < str.length) {
+                for (const which of [0, 1]) {
+                    let result = 0, shift = 0, byte;
+                    do {
+                        byte = str.charCodeAt(index++) - 63;
+                        result |= (byte & 0x1f) << shift;
+                        shift += 5;
+                    } while (byte >= 0x20);
+                    const delta = (result & 1) ? ~(result >> 1) : (result >> 1);
+                    if (which === 0) lat += delta; else lon += delta;
+                }
+                coords.push([lat / 1e6, lon / 1e6]);
+            }
+            return coords;
+        }
+
+        function routeKeyFor(places) {
+            return places.map(p => `${round4(p.lat)},${round4(p.lon)}`).join(';');
+        }
+
+        async function fetchRoute(places) {
+            const key = routeKeyFor(places);
+            try {
+                const cached = JSON.parse(cacheGet(ROUTE_CACHE_KEY) || 'null');
+                if (cached && cached.key === key && Date.now() - cached.savedAt < ROUTE_TTL_MS) {
+                    return cached.legs;
+                }
+            } catch (e) { /* ignore broken cache */ }
+
+            // The public server allows max 10 locations per request, so route in
+            // chunks that share their end/start point, sequentially to be polite.
+            const legs = [];
+            for (let start = 0; start < places.length - 1; start += ROUTE_MAX_LOCATIONS - 1) {
+                const chunk = places.slice(start, start + ROUTE_MAX_LOCATIONS);
+                const response = await fetch(ROUTE_API, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        locations: chunk.map(p => ({ lat: p.lat, lon: p.lon, type: 'break' })),
+                        costing: 'motorcycle',
+                        units: 'kilometers',
+                        directions_type: 'none',
+                    }),
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || !data.trip) {
+                    const reason = data.error || `HTTP ${response.status}`;
+                    throw new Error(`Fant ingen rute (${reason})`);
+                }
+                data.trip.legs.forEach(l => legs.push({
+                    shape: l.shape,
+                    km: l.summary.length,
+                    seconds: l.summary.time,
+                }));
+            }
+            cacheSet(ROUTE_CACHE_KEY, JSON.stringify({ key, savedAt: Date.now(), legs }));
+            return legs;
+        }
+
+        function formatDuration(seconds) {
+            const totalMin = Math.round(seconds / 60);
+            const h = Math.floor(totalMin / 60);
+            const m = totalMin % 60;
+            if (h === 0) return `${m} min`;
+            return m === 0 ? `${h} t` : `${h} t ${m} min`;
+        }
+        function formatKm(km) {
+            return km < 10 ? `${km.toFixed(1).replace('.', ',')} km` : `${Math.round(km)} km`;
+        }
+
+        function setTripStatus(text, isError = false) {
+            const status = document.getElementById('trip-status');
+            status.textContent = text;
+            status.classList.toggle('error', isError);
+            status.hidden = !text;
+        }
+
+        function ensureTripMap() {
+            if (tripMap) return;
+            tripMap = L.map('trip-map', { scrollWheelZoom: true });
+            L.tileLayer(TOPO_TILES, {
+                maxZoom: 18,
+                attribution: '© <a href="https://www.kartverket.no/">Kartverket</a>',
+            }).addTo(tripMap);
+            tripLayer = L.layerGroup().addTo(tripMap);
+            tripMap.setView([58.6, 8], 7);
+        }
+
+        function stopIcon(n, kind) {
+            return L.divIcon({
+                className: '',
+                html: `<div class="stop-marker ${kind}" style="width:26px;height:26px">${n}</div>`,
+                iconSize: [26, 26],
+                iconAnchor: [13, 13],
+                popupAnchor: [0, -13],
+            });
+        }
+
+        async function renderTrip(force = false) {
+            const places = LOCATIONS.slice();
+            const key = routeKeyFor(places);
+            if (!force && key === tripRenderedKey) {
+                if (tripMap) tripMap.invalidateSize();
+                return;
+            }
+            const token = ++tripRenderToken;
+
+            const summary = document.getElementById('trip-summary');
+            const mapEl = document.getElementById('trip-map');
+            const legList = document.getElementById('leg-list');
+
+            if (places.length < 2) {
+                summary.hidden = true;
+                mapEl.hidden = true;
+                legList.hidden = true;
+                setTripStatus('Velg minst to steder under «⚙ Velg steder» for å lage en tur. Øverste sted er start, nederste er mål.');
+                tripRenderedKey = key;
+                return;
+            }
+
+            setTripStatus('Beregner rute…');
+            try {
+                await loadLeaflet();
+                const legs = await fetchRoute(places);
+                if (token !== tripRenderToken) return; // a newer render has started
+
+                mapEl.hidden = false;
+                ensureTripMap();
+                tripMap.invalidateSize();
+                tripLayer.clearLayers();
+
+                const lines = legs.map(leg => L.polyline(decodePolyline6(leg.shape), {
+                    color: ROUTE_COLOR, weight: 5, opacity: 0.85,
+                }).addTo(tripLayer));
+
+                places.forEach((p, i) => {
+                    const kind = i === 0 ? 'start' : (i === places.length - 1 ? 'end' : '');
+                    const label = i === 0 ? ' (start)' : (i === places.length - 1 ? ' (mål)' : '');
+                    L.marker([p.lat, p.lon], { icon: stopIcon(i + 1, kind), zIndexOffset: kind ? 1000 : 0 })
+                        .bindPopup(`<strong>${i + 1}. ${escapeHtml(p.name)}</strong>${label}`)
+                        .addTo(tripLayer);
+                });
+
+                const bounds = L.featureGroup(lines).getBounds();
+                tripMap.fitBounds(bounds, { padding: [24, 24] });
+
+                const totalKm = legs.reduce((s, l) => s + l.km, 0);
+                const totalSec = legs.reduce((s, l) => s + l.seconds, 0);
+                summary.innerHTML = `
+                    <span class="trip-route-name">${escapeHtml(places[0].name)} → ${escapeHtml(places[places.length - 1].name)}</span>
+                    <span class="trip-stat"><strong>${formatKm(totalKm)}</strong></span>
+                    <span class="trip-stat">Kjøretid <strong>${formatDuration(totalSec)}</strong></span>
+                    <span class="trip-note">${places.length} steder · MC-rute uten pauser</span>`;
+                summary.hidden = false;
+
+                let cumKm = 0, cumSec = 0;
+                legList.innerHTML = '';
+                legs.forEach((leg, i) => {
+                    cumKm += leg.km;
+                    cumSec += leg.seconds;
+                    const li = document.createElement('li');
+                    li.className = 'leg-item';
+                    li.innerHTML = `
+                        <span class="leg-nums">${i + 1} → ${i + 2}</span>
+                        <span class="leg-names">${escapeHtml(places[i].name)} – ${escapeHtml(places[i + 1].name)}</span>
+                        <span class="leg-stats">${formatKm(leg.km)} · ${formatDuration(leg.seconds)}</span>
+                        <span class="leg-cum">totalt ${formatKm(cumKm)} · ${formatDuration(cumSec)}</span>`;
+                    li.addEventListener('click', () => {
+                        legList.querySelectorAll('.leg-item').forEach(el => el.classList.remove('active'));
+                        li.classList.add('active');
+                        lines.forEach((line, j) => line.setStyle(j === i
+                            ? { color: ROUTE_HIGHLIGHT, weight: 7, opacity: 1 }
+                            : { color: ROUTE_COLOR, weight: 5, opacity: 0.5 }));
+                        lines[i].bringToFront();
+                        tripMap.fitBounds(lines[i].getBounds(), { padding: [32, 32] });
+                        mapEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    });
+                    legList.appendChild(li);
+                });
+                legList.hidden = false;
+
+                setTripStatus('');
+                tripRenderedKey = key;
+            } catch (err) {
+                if (token !== tripRenderToken) return;
+                summary.hidden = true;
+                legList.hidden = true;
+                mapEl.hidden = true;
+                setTripStatus(`Kunne ikke vise turen: ${err.message}`, true);
+            }
+        }
+
+        function onPlacesChanged() {
+            if (activeTab !== 'trip') return; // rendered lazily when the tab is opened
+            clearTimeout(tripRerenderTimer);
+            tripRerenderTimer = setTimeout(() => renderTrip(), 600); // debounce rapid reordering
+        }
+
+        function showTab(name) {
+            activeTab = name;
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                const on = btn.dataset.tab === name;
+                btn.classList.toggle('active', on);
+                btn.setAttribute('aria-selected', String(on));
+            });
+            document.getElementById('tab-weather').hidden = name !== 'weather';
+            document.getElementById('tab-trip').hidden = name !== 'trip';
+            history.replaceState(null, '', name === 'trip' ? '#tur' : location.pathname + location.search);
+            if (name === 'trip') renderTrip();
+        }
+
+        function initTabs() {
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.addEventListener('click', () => showTab(btn.dataset.tab));
+            });
+            if (location.hash === '#tur') showTab('trip');
+        }
+
         initPlacesUI();
+        initTabs();
 
         if (lastFetchAge() < MIN_FETCH_INTERVAL_MS) {
             loadForecast(false);
