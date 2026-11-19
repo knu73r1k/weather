@@ -1,4 +1,4 @@
-# Værvarsel — Sør-Norge
+# Været på MC tur
 
 Enkel værapp som viser helgevarsel (fredag–søndag) for 14 steder langs
 sørlandskysten, fra Stavanger til Solsetra.
