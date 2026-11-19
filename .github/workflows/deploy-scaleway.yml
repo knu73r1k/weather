@@ -1,0 +1,104 @@
+name: Deploy to Scaleway
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-scaleway
+  cancel-in-progress: false
+
+env:
+  SCW_CLI_VERSION: 2.65.2
+  SCW_DEFAULT_REGION: fr-par
+  SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
+  SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+  SCW_DEFAULT_PROJECT_ID: ${{ secrets.SCW_DEFAULT_PROJECT_ID }}
+  SCW_DEFAULT_ORGANIZATION_ID: ${{ secrets.SCW_DEFAULT_ORGANIZATION_ID }}
+  REGISTRY: rg.fr-par.scw.cloud
+  REGISTRY_NAMESPACE: mctur
+  CONTAINER_NAMESPACE: mctur
+  CONTAINER_NAME: weather
+  IMAGE_NAME: weather
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Scaleway CLI
+        run: |
+          curl -fsSL -o /usr/local/bin/scw \
+            "https://github.com/scaleway/scaleway-cli/releases/download/v${SCW_CLI_VERSION}/scaleway-cli_${SCW_CLI_VERSION}_linux_amd64"
+          chmod +x /usr/local/bin/scw
+          scw version
+
+      - name: Ensure registry namespace
+        run: |
+          if [ "$(scw registry namespace list name="$REGISTRY_NAMESPACE" -o json | jq 'length')" = "0" ]; then
+            scw registry namespace create name="$REGISTRY_NAMESPACE" is-public=false
+          fi
+
+      - name: Build and push image
+        run: |
+          IMAGE="$REGISTRY/$REGISTRY_NAMESPACE/$IMAGE_NAME"
+          echo "$SCW_SECRET_KEY" | docker login "$REGISTRY" -u nologin --password-stdin
+          docker build -t "$IMAGE:$GITHUB_SHA" -t "$IMAGE:latest" .
+          docker push "$IMAGE:$GITHUB_SHA"
+          docker push "$IMAGE:latest"
+          echo "IMAGE_REF=$IMAGE:$GITHUB_SHA" >> "$GITHUB_ENV"
+
+      - name: Ensure container namespace
+        run: |
+          NS_ID=$(scw container namespace list name="$CONTAINER_NAMESPACE" -o json | jq -r '.[0].id // empty')
+          if [ -z "$NS_ID" ]; then
+            NS_ID=$(scw container namespace create name="$CONTAINER_NAMESPACE" -o json | jq -r '.id')
+            for i in $(seq 1 30); do
+              [ "$(scw container namespace get "$NS_ID" -o json | jq -r '.status')" = "ready" ] && break
+              sleep 5
+            done
+          fi
+          echo "NS_ID=$NS_ID" >> "$GITHUB_ENV"
+
+      - name: Create or update container
+        run: |
+          C_ID=$(scw container container list namespace-id="$NS_ID" name="$CONTAINER_NAME" -o json | jq -r '.[0].id // empty')
+          if [ -z "$C_ID" ]; then
+            C_ID=$(scw container container create \
+              namespace-id="$NS_ID" name="$CONTAINER_NAME" image="$IMAGE_REF" \
+              port=8080 privacy=public min-scale=0 max-scale=1 \
+              memory-limit-bytes=134217728 mvcpu-limit=100 \
+              https-connections-only=true \
+              -o json | jq -r '.id')
+          else
+            scw container container update "$C_ID" image="$IMAGE_REF" -o json > /dev/null
+          fi
+          echo "C_ID=$C_ID" >> "$GITHUB_ENV"
+
+      - name: Wait for container to be ready
+        run: |
+          for i in $(seq 1 60); do
+            JSON=$(scw container container get "$C_ID" -o json)
+            STATUS=$(echo "$JSON" | jq -r '.status')
+            echo "status: $STATUS"
+            if [ "$STATUS" = "ready" ]; then
+              DOMAIN=$(echo "$JSON" | jq -r '.domain_name // .public_endpoint // empty' | sed 's#^https\?://##')
+              echo "URL=https://$DOMAIN" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            if [ "$STATUS" = "error" ]; then
+              echo "$JSON" | jq -r '.error_message // .'
+              exit 1
+            fi
+            sleep 5
+          done
+          echo "Timed out waiting for container"; exit 1
+
+      - name: Smoke test
+        run: |
+          echo "Testing $URL"
+          curl -fsS --retry 5 --retry-delay 5 --retry-all-errors "$URL/" | grep -q "Været på MC tur"
+          echo "### Deployed to $URL" >> "$GITHUB_STEP_SUMMARY"
