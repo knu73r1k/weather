@@ -22,6 +22,10 @@ env:
   CONTAINER_NAME: weather
   IMAGE_NAME: weather
 
+defaults:
+  run:
+    shell: bash  # explicit bash => -eo pipefail, so CLI errors piped into jq fail the step
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -70,7 +74,6 @@ jobs:
             C_ID=$(scw container container create \
               namespace-id="$NS_ID" name="$CONTAINER_NAME" image="$IMAGE_REF" \
               port=8080 privacy=public min-scale=0 max-scale=1 \
-              memory-limit-bytes=134217728 mvcpu-limit=100 \
               https-connections-only=true \
               -o json | jq -r '.id')
           else
